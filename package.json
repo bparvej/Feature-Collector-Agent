@@ -1,0 +1,21 @@
+{
+  "name": "feature-collector-agent",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "setup": "npm install --workspaces && cp .env.example .env 2>/dev/null || true",
+    "dev": "concurrently \"npm run dev --workspace backend\" \"npm run dev --workspace frontend\"",
+    "build": "npm run build --workspace frontend && npm run build --workspace backend",
+    "test": "vitest run --config vitest.config.js",
+    "lint": "npm run lint --workspace frontend && npm run lint --workspace backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0",
+    "jsdom": "^26.1.0",
+    "vitest": "^3.2.4"
+  }
+}

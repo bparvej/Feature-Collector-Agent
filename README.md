@@ -7,10 +7,12 @@ Feature Collector Agent is a full-stack QA analysis platform for processing proj
 - React + Vite frontend with a polished SaaS dashboard
 - Express.js REST API with SQLite persistence
 - Multi-document upload and parsing for Markdown, PDF, DOCX, XLSX, CSV, TXT, and HTML
-- AI provider abstraction for Gemini, Grok, and OpenAI-ready integration
+- AI provider abstraction for Gemini, Grok, OpenAI, and OpenRouter-ready integration
 - Traceable feature inventory and test case generation
 - JSON, CSV, PDF, and HTML exports
 - Analysis history and versioning
+- API usage monitoring with model, status, and time-range filters
+- Retry-aware handling for transient provider outages such as Gemini 503 UNAVAILABLE responses
 
 ## Quick start
 
@@ -18,7 +20,7 @@ Feature Collector Agent is a full-stack QA analysis platform for processing proj
    npm install
 2. Configure local environment:
    cp .env.example .env
-3. Add your Gemini API key if you want AI analysis.
+3. Add your OpenRouter key or another provider key if you want AI analysis. The default free-model route is OpenRouter with meta-llama/llama-3.1-8b-instruct:free.
 4. Start the app:
    npm run dev
 5. Open http://localhost:5173

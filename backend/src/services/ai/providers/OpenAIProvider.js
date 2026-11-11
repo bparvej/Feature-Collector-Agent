@@ -32,7 +32,7 @@ export class OpenAIProvider extends AIProvider {
 
     const json = await response.json();
     const text = json?.choices?.[0]?.message?.content || '{}';
-    return JSON.parse(text);
+    return this.parseStructuredResponse(text);
   }
 
   async analyzeDocument(documentText) {

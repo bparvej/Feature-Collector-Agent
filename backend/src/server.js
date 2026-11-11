@@ -27,6 +27,13 @@ function sanitizeFilename(filename) {
   return (filename || 'upload.bin').replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
+function recordApiUsage({ projectId = null, projectName = '', provider = '', model = '', endpoint = '', status = 'success', responseCode = 200, rawResponse = '' }) {
+  db.prepare(`
+    INSERT INTO api_usage_logs (id, project_id, project_name, provider_name, model_name, endpoint, status, response_code, raw_response, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(uuidv4(), projectId, projectName, provider, model, endpoint, status, responseCode, rawResponse || '');
+}
+
 const fileStorage = multer.diskStorage({
   destination(_req, _file, cb) {
     cb(null, uploadsDir);
@@ -72,11 +79,13 @@ export function createApp() {
   });
 
   app.post('/api/ai/test-connection', (req, res) => {
-    const { provider = env.aiProvider, apiKey, model = env.aiModel } = req.body || {};
+    const { provider = env.aiProvider, apiKey, model = env.aiModel, projectId = null, projectName = '' } = req.body || {};
     if (!apiKey) {
+      recordApiUsage({ projectId, projectName, provider, model, endpoint: '/api/ai/test-connection', status: 'failed', responseCode: 400 });
       return res.status(400).json({ success: false, error: { message: 'API key is required to test the provider connection.' } });
     }
 
+    recordApiUsage({ projectId, projectName, provider, model, endpoint: '/api/ai/test-connection', status: 'success', responseCode: 200 });
     return res.json({
       success: true,
       data: {
@@ -223,7 +232,14 @@ export function createApp() {
 
     const provider = req.body?.provider || env.aiProvider;
     const model = req.body?.model || env.aiModel;
-    const apiKey = req.body?.apiKey || (provider === 'gemini' ? env.geminiApiKey : provider === 'grok' ? env.grokApiKey : env.openaiApiKey);
+    const apiKey = req.body?.apiKey ||
+      (provider === 'gemini'
+        ? env.geminiApiKey
+        : provider === 'grok'
+          ? env.grokApiKey
+          : provider === 'openrouter'
+            ? env.openrouterApiKey
+            : env.openaiApiKey);
     const temperature = req.body?.temperature ?? env.aiTemperature;
     const maxOutputTokens = req.body?.maxOutputTokens ?? env.aiMaxOutputTokens;
 
@@ -239,7 +255,34 @@ export function createApp() {
       .join('\n\n');
 
     const service = new AIAnalysisService({ provider, model, apiKey, temperature, maxOutputTokens });
-    const result = await service.analyzeProjectDocuments(combinedText);
+    let result;
+    try {
+      result = await service.analyzeProjectDocuments(combinedText);
+    } catch (error) {
+      const rawMessage = String(error?.message || error || 'AI provider request failed.');
+      const isUnavailable = /UNAVAILABLE|503|high demand|temporar/i.test(rawMessage);
+      const status = isUnavailable ? 'UNAVAILABLE' : 'failed';
+      const responseCode = isUnavailable ? 503 : 500;
+      recordApiUsage({
+        projectId: project.id,
+        projectName: project.name,
+        provider,
+        model,
+        endpoint: '/api/projects/:projectId/analyze',
+        status,
+        responseCode,
+      });
+
+      return res.status(responseCode).json({
+        success: false,
+        error: {
+          message: isUnavailable
+            ? 'Gemini is temporarily unavailable due to high demand. Please retry later.'
+            : rawMessage,
+          status,
+        },
+      });
+    }
 
     const jobId = uuidv4();
     const jobRow = {
@@ -259,9 +302,9 @@ export function createApp() {
     const versionCount = (db.prepare('SELECT COUNT(*) AS total FROM analysis_versions WHERE project_id = ?').get(project.id)?.total || 0) + 1;
     const versionId = uuidv4();
     db.prepare(`
-      INSERT INTO analysis_versions (id, project_id, analysis_job_id, version_number, summary, created_at)
-      VALUES (?, ?, ?, ?, ?, datetime('now'))
-    `).run(versionId, project.id, jobId, versionCount, result.summary || 'Analysis completed.');
+      INSERT INTO analysis_versions (id, project_id, analysis_job_id, version_number, summary, raw_response, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    `).run(versionId, project.id, jobId, versionCount, result.summary || 'Analysis completed.', JSON.stringify(result.rawResponse || result.analysisMetadata?.rawResponse || result) || '');
 
     db.prepare(`
       INSERT INTO analysis_provider_snapshots (id, analysis_version_id, provider_name, model_name, config_snapshot, created_at)
@@ -359,6 +402,17 @@ export function createApp() {
        VALUES (@id, @project_id, @analysis_version_id, @feature_id, @requirement_id, @module, @scenario, @title, @objective, @preconditions, @steps, @test_data, @expected_result, @test_type, @priority, @execution_type, @source_evidence, @status, datetime('now'), datetime('now'))`,
     );
 
+    recordApiUsage({
+      projectId: project.id,
+      projectName: project.name,
+      provider,
+      model,
+      endpoint: '/api/projects/:projectId/analyze',
+      status: 'success',
+      responseCode: 200,
+      rawResponse: JSON.stringify(result.rawResponse || result.analysisMetadata?.rawResponse || result),
+    });
+
     return res.json({
       success: true,
       data: {
@@ -369,6 +423,43 @@ export function createApp() {
         result,
       },
     });
+  });
+
+  app.get('/api/projects/:projectId/api-usage', (req, res) => {
+    const { status, modelName, providerName, fromDate, toDate, limit = 25 } = req.query || {};
+    let query = 'SELECT * FROM api_usage_logs WHERE project_id = ?';
+    const params = [req.params.projectId];
+
+    if (status && status !== 'all') {
+      query += ' AND LOWER(status) = ?';
+      params.push(String(status).toLowerCase());
+    }
+
+    if (modelName) {
+      query += ' AND LOWER(model_name) LIKE ?';
+      params.push(`%${String(modelName).toLowerCase()}%`);
+    }
+
+    if (providerName) {
+      query += ' AND LOWER(provider_name) LIKE ?';
+      params.push(`%${String(providerName).toLowerCase()}%`);
+    }
+
+    if (fromDate) {
+      query += ' AND date(created_at) >= date(?)';
+      params.push(String(fromDate));
+    }
+
+    if (toDate) {
+      query += ' AND date(created_at) <= date(?)';
+      params.push(String(toDate));
+    }
+
+    query += ' ORDER BY created_at DESC LIMIT ?';
+    params.push(Math.min(Number(limit) || 25, 200));
+
+    const rows = db.prepare(query).all(...params);
+    res.json({ success: true, data: rows });
   });
 
   app.get('/api/projects/:projectId/analysis-history', (req, res) => {
@@ -442,8 +533,15 @@ export function createApp() {
       const html = `<!doctype html><html><head><meta charset="utf-8"/><title>Export</title><style>body{font-family:Arial,sans-serif;padding:32px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px}</style></head><body><h1>${project.name}</h1><p>Generated on ${new Date().toISOString()}</p><table><thead><tr><th>Title</th><th>Module</th><th>Priority</th><th>Status</th></tr></thead><tbody>${payload.testCases.map((item) => `<tr><td>${item.title}</td><td>${item.module}</td><td>${item.priority}</td><td>${item.status}</td></tr>`).join('')}</tbody></table></body></html>`;
       fs.writeFileSync(filePath, html, 'utf8');
     } else if (type === 'pdf') {
-      const pdfBody = `Feature Collector Agent\nProject: ${project.name}\nGenerated at: ${new Date().toISOString()}\n\nFeature count: ${payload.features.length}\nTest case count: ${payload.testCases.length}`;
-      const pdf = `%PDF-1.4\n1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>endobj\n4 0 obj<< /Length ${pdfBody.length + 50} >>stream\nBT /F1 18 Tf 72 720 Td (${pdfBody.replace(/\(/g, '\\(').replace(/\)/g, '\\)')} ET endstream endobj\n5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\nxref\n0 6\n0000000000 65535 f \n0000000010 00000 n \n0000000062 00000 n \n0000000123 00000 n \n0000000567 00000 n \n0000001234 00000 n \ntrailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n1278\n%%EOF`;
+      const featureLines = payload.features.length
+        ? payload.features.map((item) => `- ${item.name || item.title || 'Feature'}${item.description ? `: ${item.description}` : ''}`).join('\n')
+        : 'No features captured.';
+      const testCaseLines = payload.testCases.length
+        ? payload.testCases.map((item) => `- ${item.title || 'Test Case'}${item.objective ? `: ${item.objective}` : ''}`).join('\n')
+        : 'No functional test cases captured.';
+      const pdfBody = `Feature Collector Agent\nProject: ${project.name}\nGenerated at: ${new Date().toISOString()}\n\nFeatures:\n${featureLines}\n\nFunctional Test Cases:\n${testCaseLines}`;
+      const safePdfBody = pdfBody.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+      const pdf = `%PDF-1.4\n1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>endobj\n4 0 obj<< /Length ${safePdfBody.length + 50} >>stream\nBT /F1 10 Tf 72 720 Td (${safePdfBody}) ET endstream endobj\n5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\nxref\n0 6\n0000000000 65535 f \n0000000010 00000 n \n0000000062 00000 n \n0000000123 00000 n \n0000000567 00000 n \n0000001234 00000 n \ntrailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n1278\n%%EOF`;
       fs.writeFileSync(filePath, pdf, 'utf8');
     }
 

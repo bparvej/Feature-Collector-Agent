@@ -25,9 +25,18 @@ export class AIAnalysisService {
     const coverage = await providerClass.analyzeCoverage(documentText);
     const review = await providerClass.reviewResults(documentText);
 
+    const rawResponses = {
+      classification: classification.rawResponse || '',
+      features: features.rawResponse || '',
+      scenarios: scenarios.rawResponse || '',
+      testCases: testCases.rawResponse || '',
+      coverage: coverage.rawResponse || '',
+      review: review.rawResponse || '',
+    };
+
     const result = {
       projectName: 'Generated Project',
-      summary: review.summary || 'Analysis completed successfully.',
+      summary: review.summary || classification.summary || 'Analysis completed successfully.',
       requirements: classification.requirements || [],
       features: features.features || [],
       businessRules: features.businessRules || [],
@@ -35,10 +44,13 @@ export class AIAnalysisService {
       testCases: testCases.testCases || [],
       coverage: coverage.coverage || {},
       gaps: coverage.gaps || [],
+      rawResponse: review.rawResponse || classification.rawResponse || '',
       analysisMetadata: {
         provider: this.provider,
         model: this.model,
         reviewed: true,
+        rawResponse: review.rawResponse || classification.rawResponse || '',
+        rawResponses,
       },
     };
 

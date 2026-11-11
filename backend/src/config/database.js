@@ -64,6 +64,7 @@ export const ensureDatabase = () => {
       analysis_job_id TEXT NOT NULL,
       version_number INTEGER NOT NULL,
       summary TEXT,
+      raw_response TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
       FOREIGN KEY(analysis_job_id) REFERENCES analysis_jobs(id) ON DELETE CASCADE
@@ -199,6 +200,19 @@ export const ensureDatabase = () => {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS api_usage_logs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT,
+      project_name TEXT,
+      provider_name TEXT,
+      model_name TEXT,
+      endpoint TEXT,
+      status TEXT NOT NULL DEFAULT 'success',
+      response_code INTEGER NOT NULL DEFAULT 200,
+      raw_response TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS exports (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
@@ -219,6 +233,16 @@ export const ensureDatabase = () => {
 
   db.exec(initSql);
 
+  const ensureColumn = (tableName, columnName, columnType) => {
+    const exists = db.prepare(`PRAGMA table_info(${tableName})`).all();
+    if (!exists.some((column) => column.name === columnName)) {
+      db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType};`);
+    }
+  };
+
+  ensureColumn('analysis_versions', 'raw_response', 'TEXT');
+  ensureColumn('api_usage_logs', 'raw_response', 'TEXT');
+
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_documents_project_id ON documents(project_id);
     CREATE INDEX IF NOT EXISTS idx_features_project_id ON features(project_id);
@@ -226,6 +250,7 @@ export const ensureDatabase = () => {
     CREATE INDEX IF NOT EXISTS idx_requirement_project_id ON requirements(project_id);
     CREATE INDEX IF NOT EXISTS idx_evidence_project_id ON evidence_references(project_id);
     CREATE INDEX IF NOT EXISTS idx_analysis_versions_project_id ON analysis_versions(project_id);
+    CREATE INDEX IF NOT EXISTS idx_api_usage_logs_project_id ON api_usage_logs(project_id);
   `);
 };
 

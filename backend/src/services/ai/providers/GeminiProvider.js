@@ -12,7 +12,7 @@ export class GeminiProvider extends AIProvider {
       throw new Error('Gemini API key is missing. Add it in the AI configuration panel or .env.');
     }
 
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + (this.config.model || 'gemini-3.8-flash') + ':generateContent?key=' + this.apiKey, {
+    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + (this.config.model || 'gemini-3.5-flash-lite') + ':generateContent?key=' + this.apiKey, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -31,7 +31,7 @@ export class GeminiProvider extends AIProvider {
 
     const json = await response.json();
     const text = json?.candidates?.[0]?.content?.parts?.map((part) => part.text).join('') || '{}';
-    return JSON.parse(text);
+    return this.parseStructuredResponse(text);
   }
 
   async analyzeDocument(documentText) {

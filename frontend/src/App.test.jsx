@@ -31,4 +31,9 @@ describe('App', () => {
     render(<App />);
     expect(await screen.findByText(/QA Analysis Dashboard/i)).toBeInTheDocument();
   });
+
+  it('shows the dedicated API Logs menu item', async () => {
+    render(<App />);
+    expect(await screen.findByRole('button', { name: /API Logs/i })).toBeInTheDocument();
+  });
 });
